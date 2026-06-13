@@ -1,0 +1,19 @@
+[package]
+name = "sneekie"
+version = "1.2.0"
+edition = "2021"
+description = "Sneekie (1988) by HerbySoft — a faithful terminal port of the GW-BASIC original, plus a survival mode and a self-playing bot"
+license = "MIT"
+
+[dependencies]
+crossterm = "0.28"
+rodio = { version = "0.19", optional = true }
+
+[features]
+# Real PC-speaker-style square-wave audio. Opt-in: the default build stays
+# dependency-free and silent. Building with this needs ALSA dev headers on Linux.
+audio = ["dep:rodio"]
+
+[profile.release]
+opt-level = 3
+lto = true
