@@ -11,8 +11,9 @@ food, the `☺` traps, the `◙` pushable stones and the `↑→←` arrow hazar
 look just like 1988, in any modern terminal.
 
 Ported from the [single-page HTML re-creation](https://herbert256.github.io/sneekie/)
-of the original `SNEEKIE.BAS`. Code comments carry the original BASIC line
-numbers so the lineage stays legible.
+of the original `SNEEKIE.BAS` — by Herbert Groot Jebbink, whose source lives at
+[github.com/herbert256/sneekie](https://github.com/herbert256/sneekie). Code
+comments carry the original BASIC line numbers so the lineage stays legible.
 
 ## Build & run
 
@@ -173,5 +174,6 @@ danger phase, so classic mode runs byte-identically to the pure port.
   `SOUND` statements. Building with the feature needs ALSA dev headers on Linux
   (`pacman -S alsa-lib`); if no audio device is found at runtime the game falls
   back to silent.
-- Original game © July 1988 by HerbySoft (Herbert Groot Jebbink). This port is
-  an homage; all credit for the design is his.
+- Original game © July 1988 by HerbySoft (Herbert Groot Jebbink) —
+  [github.com/herbert256/sneekie](https://github.com/herbert256/sneekie). This
+  port is an homage; all credit for the design is his.
