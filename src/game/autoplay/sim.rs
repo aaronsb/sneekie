@@ -32,6 +32,7 @@ pub(super) struct Sim {
     occ: HashSet<i32>,    // body occupancy (fast collision tests)
     food: HashSet<i32>,   // remaining heart/club cells
     penalty: HashSet<i32>, // smiley cells: passable, but eating one costs -50
+    stones: HashSet<i32>, // pushable stones (◙): shovable one cell if the far side is clear
     hunters: Vec<i32>,    // Sneekie+ danger phase: hunter offsets (empty otherwise)
     hocc: HashSet<i32>,   // hunter occupancy (fast tests)
     wallet: i32,          // banked score available to pay ram/defeat costs
@@ -45,6 +46,7 @@ impl Sim {
             occ,
             food,
             penalty: HashSet::new(),
+            stones: HashSet::new(),
             hunters: Vec::new(),
             hocc: HashSet::new(),
             wallet: 0,
@@ -54,6 +56,11 @@ impl Sim {
     /// Record the smiley cells the planner may eat through at a cost.
     pub(super) fn set_penalty(&mut self, penalty: HashSet<i32>) {
         self.penalty = penalty;
+    }
+
+    /// Record the pushable stones the planner may shove.
+    pub(super) fn set_stones(&mut self, stones: HashSet<i32>) {
+        self.stones = stones;
     }
 
     /// Load the Sneekie+ danger-phase state: the live hunters and the score the
@@ -120,6 +127,34 @@ impl Sim {
         if next < 0 || (next as usize) >= blocked.len() || blocked[next as usize] {
             return Outcome::Dead;
         }
+        // Pushable stone: shove it one cell in the same direction if the far side
+        // is truly empty; the snake then advances into the stone's old cell (an
+        // empty step — no growth). If it can't be pushed, treat the move as dead
+        // so the planner routes elsewhere instead of bonking it.
+        if self.stones.contains(&next) {
+            let beyond = next + d;
+            let clear = beyond >= 0
+                && (beyond as usize) < blocked.len()
+                && !blocked[beyond as usize]
+                && !self.occ.contains(&beyond)
+                && !self.stones.contains(&beyond)
+                && !self.food.contains(&beyond)
+                && !self.penalty.contains(&beyond);
+            if !clear {
+                return Outcome::Dead;
+            }
+            self.stones.remove(&next);
+            self.stones.insert(beyond);
+            if let Some(tail) = self.body.pop_front() {
+                self.occ.remove(&tail);
+            }
+            if self.occ.contains(&next) {
+                return Outcome::Dead;
+            }
+            self.occ.insert(next);
+            self.body.push_back(next);
+            return Outcome::Moved;
+        }
         let is_food = self.food.contains(&next);
         let is_pen = self.penalty.contains(&next);
         // Eating a heart *or* a smiley grows the snake (the head advances, the
@@ -154,6 +189,7 @@ impl Sim {
             && (off as usize) < blocked.len()
             && !blocked[off as usize]
             && !self.occ.contains(&off)
+            && !self.stones.contains(&off)
     }
 
     /// Can the head still reach its own tail over free cells? If so the snake can

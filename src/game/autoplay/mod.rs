@@ -230,11 +230,12 @@ impl super::Game {
         !(matches!(v, 32 | 3 | 5) || is_snake_char(v))
     }
 
-    /// A *hard* obstacle: everything `static_blocked` flags except a smiley.
-    /// Smileys are passable at a -50 cost (eat through one when it's the only way
-    /// forward), so they must not wall off a region for the planner.
+    /// A *hard* obstacle: a true wall/arrow. Smileys (passable at a -50 cost) and
+    /// pushable stones (shovable when the far side is clear) are deliberately left
+    /// out so they can't wall off a region for the planner — the `Sim` models
+    /// what actually happens when the snake enters them.
     fn hard_blocked(&self, off: i32) -> bool {
-        self.static_blocked(off) && self.peek(off) != 1
+        self.static_blocked(off) && !matches!(self.peek(off), 1 | 10)
     }
 
     /// Would stepping `dir` leave the snake able to reach its own tail? If so it
@@ -257,6 +258,15 @@ impl super::Game {
         let next = head + dir_offset(dir);
         if next < 0 || (next as usize) >= 4000 || self.hard_blocked(next) {
             return false;
+        }
+        // A stone is only a legal move if it can be pushed: the cell one further
+        // in the same direction must be empty. A push doesn't grow the snake.
+        if self.peek(next) == 10 {
+            let beyond = next + dir_offset(dir);
+            if !(beyond >= 0 && (beyond as usize) < 4000 && self.peek(beyond) == 32) {
+                return false;
+            }
+            return self.move_keeps_room(next, false, true);
         }
         // Heart, club and smiley all grow (the tail stays); empty vacates it.
         let grows = self.is_food(next) || self.peek(next) == 1;

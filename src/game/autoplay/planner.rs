@@ -74,6 +74,7 @@ impl crate::game::Game {
         }
         let mut food: HashSet<i32> = HashSet::new();
         let mut penalty: HashSet<i32> = HashSet::new();
+        let mut stones: HashSet<i32> = HashSet::new();
         for off in (0..4000i32).step_by(2) {
             match self.peek(off) {
                 3 | 5 => {
@@ -82,11 +83,15 @@ impl crate::game::Game {
                 1 => {
                     penalty.insert(off);
                 }
+                10 => {
+                    stones.insert(off);
+                }
                 _ => {}
             }
         }
         let mut sim = Sim::new(body, food);
         sim.set_penalty(penalty);
+        sim.set_stones(stones);
         sim
     }
 
@@ -225,7 +230,7 @@ impl crate::game::Game {
                 continue;
             }
             let n = head + d;
-            if n >= 0 && (n as usize) < 4000 && !seen[n as usize] && matches!(self.peek(n), 32 | 3 | 5 | 1) {
+            if n >= 0 && (n as usize) < 4000 && !seen[n as usize] && matches!(self.peek(n), 32 | 3 | 5 | 1 | 10) {
                 seen[n as usize] = true;
                 first[n as usize] = sc;
                 q.push_back(n);
@@ -237,7 +242,7 @@ impl crate::game::Game {
             }
             for (_sc, d) in DIRS {
                 let n = c + d;
-                if n >= 0 && (n as usize) < 4000 && !seen[n as usize] && matches!(self.peek(n), 32 | 3 | 5 | 1) {
+                if n >= 0 && (n as usize) < 4000 && !seen[n as usize] && matches!(self.peek(n), 32 | 3 | 5 | 1 | 10) {
                     seen[n as usize] = true;
                     first[n as usize] = first[c as usize];
                     q.push_back(n);
