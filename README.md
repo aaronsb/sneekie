@@ -15,6 +15,11 @@ of the original `SNEEKIE.BAS` — by Herbert Groot Jebbink, whose source lives a
 [github.com/herbert256/sneekie](https://github.com/herbert256/sneekie). Code
 comments carry the original BASIC line numbers so the lineage stays legible.
 
+The port is faithful, but the substance that grew here is the **self-playing
+bot** — a study in making a game-playing algorithm competent enough that you stop
+catching its mistakes. If you only read one part, read [Autoplay](#autoplay-the-bot--screensaver)
+and the [notes on building it](#notes-from-building-the-player).
+
 ## Build & run
 
 ```sh
@@ -162,6 +167,42 @@ either mode (`--auto`, `--auto --plus`, or the menu's
 `A`). Ctrl+C to quit. (`AUTO_STALL` in `src/game/autoplay/mod.rs` tunes patience;
 `PLAN_BUDGET`/`PLAN_DEPTH`/`BEAM_WIDTH` in `planner.rs` and `MCTS_SIMS` in
 `mcts.rs` tune how hard the two planners think.)
+
+### Notes from building the player
+
+Porting the 1988 game was the easy half. The interesting half was making the bot
+good enough that you stop catching its mistakes — the moment it crosses from *"why
+didn't it do X?!"* to *"I'm not sure what the best move was either."* It got there
+not through one clever trick but by **modeling the world it acts in**. Almost every
+visible blunder turned out to be a dynamic the planner simply wasn't simulating:
+
+| "Why didn't it…" | What it wasn't modeling | Fix |
+|---|---|---|
+| avoid trapping itself in its own tail | the tail vacating over time | forward sim with a real body deque |
+| keep room around its head | reachable space vs. body length | head-room ≥ length safety gate |
+| go grab the last few hearts | room necessarily shrinks late-game | relax the gate to a maneuvering floor |
+| push a stone out of the way | stones are shovable, not walls | model the push in the sim |
+| ram the *last* hunter to end a wave | clearing the wave ends the danger | reward reaching zero hunters |
+| time a crawling gap / dodge an arrow | hazards have *future* positions | time-aware `(cell, step)` search |
+
+Two findings worth keeping:
+
+- **Brains by regime, not one universal solver.** A fully-observable game with a
+  branching factor of ≤3 doesn't need a single grand algorithm; it needs the right
+  *model* per situation — a tail-aware beam on static boards, an AlphaGo-shaped
+  MCTS against the (deterministic, and therefore searchable) swarm, and a
+  time-expanded BFS through the moving hazards.
+- **Compute buys depth, not breadth.** Parallelising the MCTS across cores did
+  nothing while the search was shallow — a single core already saturates a 3-way
+  per-move decision. The cores only paid once the budget went into a *longer
+  horizon*: 8 cores then lost 1 life where 1 core lost 3, same swarm, same frame
+  rate. Several cores of modern compute against an 8086 snake — and the lesson is
+  that the snake's depth, not its width, is where the compute goes.
+
+This is also a stepping stone, not a destination: the MCTS root **visit-count
+distribution is exactly the policy-training target** a learned net would want, and
+a rollout's outcome is its value target — so every strong run is already a labelled
+training example. The competent hand-built player is a corpus generator in waiting.
 
 ## How to play
 
