@@ -46,6 +46,11 @@ const AUTO_STALL: i32 = 180;
 /// enough to catch the wider loops the bot can fall into between heart clusters.
 const TRAIL: usize = 128;
 
+/// Minimum head maneuvering pocket the safety gate insists on when reachable
+/// space is below the snake's length. Small, so the bot can still thread tight
+/// endgames — just not into a near-dead one- or two-cell pocket.
+const ROOM_FLOOR: i32 = 4;
+
 /// CP437 codes the snake's own body uses (head + the double-line segments).
 /// Distinct from every wall glyph, so these mark *movable* obstacles.
 fn is_snake_char(c: u8) -> bool {
@@ -241,7 +246,7 @@ impl super::Game {
         if next < 0 || (next as usize) >= 4000 || !self.passable(next) {
             return false;
         }
-        self.tail_reachable_after(next, self.is_food(next), false)
+        self.move_keeps_room(next, self.is_food(next), false)
     }
 
     /// Tail-safety gate for a *planner* move, which may deliberately step onto a
@@ -255,39 +260,44 @@ impl super::Game {
         }
         // Heart, club and smiley all grow (the tail stays); empty vacates it.
         let grows = self.is_food(next) || self.peek(next) == 1;
-        self.tail_reachable_after(next, grows, true)
+        self.move_keeps_room(next, grows, true)
     }
 
-    /// Shared core of the two gates. After moving the head to `next` (growing if
-    /// `grows`), is there room to keep moving? Require the free space reachable
-    /// from the new head — with the tail vacated, smileys optionally passable —
-    /// to be at least the snake's length. Mere tail-reachability isn't enough: a
-    /// head sealed in a one-cell pocket can still "reach its tail" down a one-wide
-    /// channel yet have nowhere to go. Free-space ≥ length is the standard guard
-    /// against packing yourself to death.
-    fn tail_reachable_after(&self, next: i32, grows: bool, soft_smiley: bool) -> bool {
-        // Body that remains after the move: drop the tail unless we grew.
+    /// Shared core of the two gates — a one-ply backstop over the tail-aware beam
+    /// planner, so keep it permissive. After moving the head to `next` (growing
+    /// if `grows`), a move is safe if the free space reachable from the new head
+    /// (tail vacated, smileys optionally passable) is at least the snake's length
+    /// — ample room — OR it's a tighter spot that still has a real maneuvering
+    /// pocket (`ROOM_FLOOR`+ cells) AND keeps the tail reachable, so the snake
+    /// can follow itself out. The floor is the key: it stops a one-wide dead
+    /// channel from passing as "tail-reachable" (the seal-yourself bug) without
+    /// forbidding the legitimately tight moves needed to grab the last hearts.
+    fn move_keeps_room(&self, next: i32, grows: bool, soft_smiley: bool) -> bool {
         let start = if grows { self.etel } else { self.etel + 1 };
         let mut occ = vec![false; 4000];
         for i in start..=self.btel {
             occ[self.t[i as usize] as usize] = true;
         }
         occ[next as usize] = true; // the new head
-        occ[self.t[start as usize] as usize] = false; // the tail vacates
+        let tail = self.t[start as usize];
+        occ[tail as usize] = false; // the tail vacates
         let base = self.btel - self.etel + 1;
-        let need = if grows { base + 1 } else { base };
-        self.head_room(next, &occ, soft_smiley, need) >= need
+        let len = if grows { base + 1 } else { base };
+        let (room, reached_tail) = self.head_room(next, &occ, soft_smiley, tail, len);
+        room >= len || (room >= ROOM_FLOOR && reached_tail)
     }
 
-    /// Count free cells reachable from `head` over non-obstacle, non-body cells,
-    /// stopping once `cap` is reached (the caller only needs a threshold). With
-    /// `soft_smiley`, smileys count as free (passable at a cost).
-    fn head_room(&self, head: i32, occ: &[bool], soft_smiley: bool, cap: i32) -> i32 {
+    /// Flood free cells reachable from `head` over non-obstacle, non-body cells,
+    /// counting up to `cap` and noting whether the vacated `tail` was reached.
+    /// When the count stays below `cap` the flood is exhaustive, so `reached_tail`
+    /// is exact. With `soft_smiley`, smileys count as free (passable at a cost).
+    fn head_room(&self, head: i32, occ: &[bool], soft_smiley: bool, tail: i32, cap: i32) -> (i32, bool) {
         let mut seen = vec![false; 4000];
         let mut q: VecDeque<i32> = VecDeque::new();
         seen[head as usize] = true;
         q.push_back(head);
         let mut count = 0;
+        let mut reached = false;
         while let Some(c) = q.pop_front() {
             for (_sc, d) in DIRS {
                 let n = c + d;
@@ -302,14 +312,17 @@ impl super::Game {
                 if !blocked && !occ[n as usize] {
                     seen[n as usize] = true;
                     count += 1;
+                    if n == tail {
+                        reached = true;
+                    }
                     if count >= cap {
-                        return count;
+                        return (count, reached);
                     }
                     q.push_back(n);
                 }
             }
         }
-        count
+        (count, reached)
     }
 
     /// Per-level reset for the bot: lock to CGA (the only *color* palette — the
