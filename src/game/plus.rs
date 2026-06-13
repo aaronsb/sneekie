@@ -299,14 +299,29 @@ impl super::Game {
     }
     fn hud_danger(&mut self) {
         let kills = (self.zcore.max(0) / HUNTER_COST).max(0);
-        let s = format!(
-            "SNEEKIE+  wave {}  {} hunters  SCORE x{}  ram-kills: {}  [m] {}",
-            self.wave + 1,
-            self.hunters.len(),
-            self.mult,
-            kills,
-            if self.muted { "muted" } else { "sound" }
-        );
+        // While the bot drives, show the live planner readout (cores + total tree
+        // nodes searched last tick) so the compute-vs-survival experiment is
+        // visible; +/- adjusts the cores.
+        let s = if self.auto {
+            format!(
+                "SNEEKIE+ w{} {}h x{} ram:{} | PLANNER {}c {}nodes  [+/-]",
+                self.wave + 1,
+                self.hunters.len(),
+                self.mult,
+                kills,
+                self.planner_cores,
+                self.plan_nodes,
+            )
+        } else {
+            format!(
+                "SNEEKIE+  wave {}  {} hunters  SCORE x{}  ram-kills: {}  [m] {}",
+                self.wave + 1,
+                self.hunters.len(),
+                self.mult,
+                kills,
+                if self.muted { "muted" } else { "sound" }
+            )
+        };
         self.hud(&s);
     }
 

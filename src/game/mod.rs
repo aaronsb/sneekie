@@ -115,6 +115,12 @@ pub struct Game {
     auto_trail_i: usize,             // autoplay: ring write index
     auto_period: i32,                // autoplay: last detected cycle length
     auto_cycles: i32,                // autoplay: consecutive same-period matches
+    auto_stuck: i32,                 // autoplay: consecutive ticks the head didn't move (wedge)
+    auto_prev_head: i32,             // autoplay: head offset last tick (wedge detection)
+    auto_plan: std::collections::VecDeque<u32>, // autoplay: queued planner moves (scan codes)
+    planner_cores: usize,            // autoplay: worker cores for the parallel MCTS (live-adjustable)
+    planner_max: usize,              // hardware-thread ceiling for planner_cores
+    plan_nodes: usize,               // autoplay: total tree nodes searched last MCTS tick (HUD)
     muted: bool,                     // audio muted (Sneekie+ only)
     grace_until: Option<Instant>,    // when the current level's grace period ends
     danger: bool,                    // hunters are loose
@@ -135,11 +141,14 @@ impl Drop for Game {
 }
 
 impl Game {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         forced_theme: Option<usize>,
         forced_mode: Option<bool>,
         forced_live: Option<bool>,
         forced_auto: bool,
+        planner_cores: usize,
+        planner_max: usize,
         save_path: Option<std::path::PathBuf>,
     ) -> Self {
         Game {
@@ -179,10 +188,16 @@ impl Game {
             auto: false,
             auto_idle: 0,
             auto_last_score: 0,
-            auto_trail: vec![-1; 64], // must match TRAIL in autoplay.rs
+            auto_trail: vec![-1; 128], // must match TRAIL in autoplay/mod.rs
             auto_trail_i: 0,
             auto_period: 0,
             auto_cycles: 0,
+            auto_stuck: 0,
+            auto_prev_head: -1,
+            auto_plan: std::collections::VecDeque::new(),
+            planner_cores: planner_cores.max(1),
+            planner_max: planner_max.max(1),
+            plan_nodes: 0,
             muted: false,
             grace_until: None,
             danger: false,
