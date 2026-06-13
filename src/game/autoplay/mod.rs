@@ -258,9 +258,13 @@ impl super::Game {
         self.tail_reachable_after(next, grows, true)
     }
 
-    /// Shared core of the two gates: after moving the head to `next` (growing if
-    /// `grows`), can it still reach the vacated tail? `soft_smiley` lets the
-    /// reachability flood pass through smileys.
+    /// Shared core of the two gates. After moving the head to `next` (growing if
+    /// `grows`), is there room to keep moving? Require the free space reachable
+    /// from the new head — with the tail vacated, smileys optionally passable —
+    /// to be at least the snake's length. Mere tail-reachability isn't enough: a
+    /// head sealed in a one-cell pocket can still "reach its tail" down a one-wide
+    /// channel yet have nowhere to go. Free-space ≥ length is the standard guard
+    /// against packing yourself to death.
     fn tail_reachable_after(&self, next: i32, grows: bool, soft_smiley: bool) -> bool {
         // Body that remains after the move: drop the tail unless we grew.
         let start = if grows { self.etel } else { self.etel + 1 };
@@ -269,29 +273,26 @@ impl super::Game {
             occ[self.t[i as usize] as usize] = true;
         }
         occ[next as usize] = true; // the new head
-        let new_tail = self.t[start as usize];
-        occ[new_tail as usize] = false; // the tail vacates — it's the goal
-        self.reaches(next, new_tail, &occ, soft_smiley)
+        occ[self.t[start as usize] as usize] = false; // the tail vacates
+        let base = self.btel - self.etel + 1;
+        let need = if grows { base + 1 } else { base };
+        self.head_room(next, &occ, soft_smiley, need) >= need
     }
 
-    /// BFS over free cells (obstacles + the virtual body in `occ`) asking whether
-    /// `start` can reach `goal`. With `soft_smiley`, smileys count as passable.
-    fn reaches(&self, start: i32, goal: i32, occ: &[bool], soft_smiley: bool) -> bool {
-        if start == goal {
-            return true;
-        }
+    /// Count free cells reachable from `head` over non-obstacle, non-body cells,
+    /// stopping once `cap` is reached (the caller only needs a threshold). With
+    /// `soft_smiley`, smileys count as free (passable at a cost).
+    fn head_room(&self, head: i32, occ: &[bool], soft_smiley: bool, cap: i32) -> i32 {
         let mut seen = vec![false; 4000];
         let mut q: VecDeque<i32> = VecDeque::new();
-        seen[start as usize] = true;
-        q.push_back(start);
+        seen[head as usize] = true;
+        q.push_back(head);
+        let mut count = 0;
         while let Some(c) = q.pop_front() {
             for (_sc, d) in DIRS {
                 let n = c + d;
                 if n < 0 || (n as usize) >= 4000 || seen[n as usize] {
                     continue;
-                }
-                if n == goal {
-                    return true;
                 }
                 let blocked = if soft_smiley {
                     self.hard_blocked(n)
@@ -300,11 +301,15 @@ impl super::Game {
                 };
                 if !blocked && !occ[n as usize] {
                     seen[n as usize] = true;
+                    count += 1;
+                    if count >= cap {
+                        return count;
+                    }
                     q.push_back(n);
                 }
             }
         }
-        false
+        count
     }
 
     /// Per-level reset for the bot: lock to CGA (the only *color* palette — the

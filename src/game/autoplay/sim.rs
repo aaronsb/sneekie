@@ -185,8 +185,10 @@ impl Sim {
         false
     }
 
-    /// Reachable free space from the head (capped) — a roominess tiebreak that
-    /// keeps the bot out of dead-ending corridors.
+    /// Reachable free space from the head (capped) — the bot's maneuvering room.
+    /// Weighted heavily by the planner so it won't coil its tail into a small
+    /// pocket (which keeps the tail "reachable" yet boxes the head in). The cap
+    /// is generous enough to tell a cramped coil from an open board.
     pub(super) fn open_space(&self, blocked: &[bool]) -> i32 {
         let head = self.head();
         let mut seen: HashSet<i32> = HashSet::new();
@@ -196,7 +198,7 @@ impl Sim {
         let mut count = 0;
         while let Some(c) = q.pop_front() {
             count += 1;
-            if count > 200 {
+            if count > 500 {
                 break;
             }
             for (_sc, d) in DIRS {

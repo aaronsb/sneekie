@@ -41,6 +41,10 @@ const STEP_PENALTY: i64 = 200;
 /// Weight on distance-to-nearest-food. Each step closer is worth this; it must
 /// exceed `STEP_PENALTY` for the bot to march toward far food instead of idling.
 const DIST_WEIGHT: i64 = 500;
+/// Weight on reachable free space (maneuvering room). Heavy enough that the bot
+/// won't pack its tail into a small pocket to stay "tail-safe" — keeping the
+/// board open beats a marginally shorter route to the next heart.
+const OPEN_WEIGHT: i64 = 150;
 
 struct Node {
     sim: Sim,
@@ -137,7 +141,7 @@ impl crate::game::Game {
         // if it brings the head closer to food. STEP_PENALTY < DIST_WEIGHT, so
         // progress nets positive and twirling-in-place nets negative.
         s -= depth as i64 * STEP_PENALTY;
-        s += sim.open_space(blocked) as i64;
+        s += sim.open_space(blocked) as i64 * OPEN_WEIGHT;
         s
     }
 
