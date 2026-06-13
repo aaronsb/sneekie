@@ -14,6 +14,19 @@ use std::io;
 use game::Game;
 use theme::theme_index;
 
+/// Default planner core count: every hardware thread but a reserved couple, so
+/// the screensaver never eats the whole machine. At least one.
+fn default_cores() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get().saturating_sub(2).max(1))
+        .unwrap_or(1)
+}
+
+/// Upper bound on planner cores — the machine's hardware threads.
+fn max_cores() -> usize {
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
+}
+
 /// Where to persist the highscore and chosen theme: `$XDG_CONFIG_HOME/sneekie/state`
 /// (falling back to `~/.config/sneekie/state`).
 fn save_path() -> Option<std::path::PathBuf> {
@@ -35,8 +48,13 @@ fn print_help() {
          \x20   --plus      Sneekie+ survival: smileys become \u{263B} hunters that\n\
          \x20               chase you after a grace timer; a score x multiplier\n\
          \x20               climbs the longer you brave the swarm\n\
-         \x20   --auto      a bot plays (BFS-to-food + open-space fallback);\n\
+         \x20   --auto      a bot plays (beam planner / MCTS vs. the swarm);\n\
          \x20               combine with --plus to watch it survive the swarm\n\
+         \n\
+         AUTOPLAY PLANNING:\n\
+         \x20   --planner-cores N   worker cores for the parallel planner\n\
+         \x20                       (default: hardware threads minus 2; in-game\n\
+         \x20                       +/- adjusts it live)\n\
          \n\
          MOVEMENT:\n\
          \x20   --turn-based   the snake steps once per keypress (hunters move\n\
@@ -68,6 +86,7 @@ fn main() -> io::Result<()> {
     let mut forced_mode: Option<bool> = None; // Some(true)=+, Some(false)=classic
     let mut forced_live: Option<bool> = None; // Some(true)=live, Some(false)=turn-based
     let mut forced_auto = false; // --auto: the bot drives
+    let mut forced_cores: Option<usize> = None; // --planner-cores N
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
     while i < args.len() {
@@ -96,6 +115,17 @@ fn main() -> io::Result<()> {
             "--auto" | "--autoplay" => {
                 forced_auto = true;
             }
+            "--planner-cores" | "--cores" => {
+                if let Some(n) = args.get(i + 1).and_then(|s| s.parse::<usize>().ok()) {
+                    forced_cores = Some(n.clamp(1, max_cores()));
+                    i += 1;
+                }
+            }
+            s if s.starts_with("--planner-cores=") => {
+                if let Ok(n) = s["--planner-cores=".len()..].parse::<usize>() {
+                    forced_cores = Some(n.clamp(1, max_cores()));
+                }
+            }
             "--theme" => {
                 if let Some(name) = args.get(i + 1) {
                     forced_theme = Some(theme_index(name));
@@ -116,7 +146,16 @@ fn main() -> io::Result<()> {
         i += 1;
     }
 
-    let mut game = Game::new(forced_theme, forced_mode, forced_live, forced_auto, save_path());
+    let planner_cores = forced_cores.unwrap_or_else(default_cores);
+    let mut game = Game::new(
+        forced_theme,
+        forced_mode,
+        forced_live,
+        forced_auto,
+        planner_cores,
+        max_cores(),
+        save_path(),
+    );
     game.init_terminal()?;
     game.ensure_size();
     game.program();

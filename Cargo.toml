@@ -1,12 +1,13 @@
 [package]
 name = "sneekie"
-version = "1.2.0"
+version = "1.3.0"
 edition = "2021"
 description = "Sneekie (1988) by HerbySoft — a faithful terminal port of the GW-BASIC original, plus a survival mode and a self-playing bot"
 license = "MIT"
 
 [dependencies]
 crossterm = "0.28"
+rayon = "1.10"
 rodio = { version = "0.19", optional = true }
 
 [features]

@@ -189,6 +189,17 @@ impl super::Game {
         self.auto_dir()
     }
 
+    /// Live keyboard during autoplay: `+`/`-` adjust how many cores the parallel
+    /// planner may use (clamped to the hardware-thread ceiling), for watching how
+    /// much more compute actually helps the bot survive the swarm.
+    pub(super) fn auto_handle_key(&mut self, code: u32) {
+        match code as u8 {
+            b'+' | b'=' => self.planner_cores = (self.planner_cores + 1).min(self.planner_max),
+            b'-' | b'_' => self.planner_cores = self.planner_cores.saturating_sub(1).max(1),
+            _ => {}
+        }
+    }
+
     /// Which planner drives this tick:
     /// - **Mcts** — Sneekie+ with the swarm loose (the deterministic, searchable
     ///   adversary). Eating doesn't reseed during danger, so rollouts are exact.

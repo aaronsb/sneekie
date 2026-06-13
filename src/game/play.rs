@@ -88,7 +88,11 @@ impl super::Game {
         //    the grace clock, multiplier, and HUD keep ticking in real time.
         let a = if self.auto {
             // The bot drives: pace the demo (and let Ctrl+C through) then steer.
-            let _ = self.key_or_timeout(70);
+            // A +/- keypress live-adjusts how many cores the planner may use.
+            let k = self.key_or_timeout(70);
+            if k.len == 1 {
+                self.auto_handle_key(k.code);
+            }
             let mv = self.auto_choose();
             if mv == 27 {
                 In::single(27) // bot pressed ESC — stuck, give up a life
