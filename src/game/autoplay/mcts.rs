@@ -41,6 +41,12 @@ const ROLLOUT_EPS_DEN: u64 = 4;
 /// cores commit to deepening *different* first moves rather than all agreeing —
 /// the diversity that makes root-parallel cores buy depth, not just repetition.
 const ROOT_NOISE_FRAC: f64 = 0.25;
+/// Value of clearing the wave — defeating the *last* hunter ends the danger
+/// phase and returns the snake to safe eating. Near-win (just under a full level
+/// clear), so when the bank can afford it the search rams the last hunter to end
+/// the wave instead of cowering. Crucially this only rewards reaching *zero*
+/// hunters, never thinning the swarm for its own sake.
+const WAVE_CLEAR: f64 = 0.9;
 
 /// The read-only board the workers share: the static-obstacle map (hunters left
 /// passable — they live in the `Sim`) and the food-distance field. `Send + Sync`
@@ -198,6 +204,9 @@ fn rollout(ctx: &PlanCtx, mut sim: Sim, rng: &mut Rng) -> f64 {
         if sim.food_left() == 0 {
             return 1.0; // cleared the level
         }
+        if sim.hunters_left() == 0 {
+            return WAVE_CLEAR; // cleared the wave — danger over, back to eating
+        }
         let rev = -sim.last_dir();
         let head = sim.head();
         let mut legal: Vec<(i32, f64)> = Vec::new(); // (delta, heuristic)
@@ -275,6 +284,8 @@ fn search_tree(ctx: &PlanCtx, root: &Sim, sims: u32, seed: u64) -> (Vec<(u32, u3
                 child.terminal = Some(0.0);
             } else if child.sim.food_left() == 0 {
                 child.terminal = Some(1.0);
+            } else if child.sim.hunters_left() == 0 {
+                child.terminal = Some(WAVE_CLEAR); // ramming the last hunter ends the wave
             }
             let cidx = arena.len();
             let v = child

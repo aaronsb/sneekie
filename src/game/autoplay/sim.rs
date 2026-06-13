@@ -72,6 +72,10 @@ impl Sim {
         self.food.len()
     }
 
+    pub(super) fn hunters_left(&self) -> usize {
+        self.hunters.len()
+    }
+
     /// The offset delta of the last move (head − neck), or 0 for a length-1 body.
     /// Used to forbid reversing into the neck.
     pub(super) fn last_dir(&self) -> i32 {
