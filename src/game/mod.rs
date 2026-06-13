@@ -115,6 +115,8 @@ pub struct Game {
     auto_trail_i: usize,             // autoplay: ring write index
     auto_period: i32,                // autoplay: last detected cycle length
     auto_cycles: i32,                // autoplay: consecutive same-period matches
+    auto_stuck: i32,                 // autoplay: consecutive ticks the head didn't move (wedge)
+    auto_prev_head: i32,             // autoplay: head offset last tick (wedge detection)
     auto_plan: std::collections::VecDeque<u32>, // autoplay: queued planner moves (scan codes)
     muted: bool,                     // audio muted (Sneekie+ only)
     grace_until: Option<Instant>,    // when the current level's grace period ends
@@ -180,10 +182,12 @@ impl Game {
             auto: false,
             auto_idle: 0,
             auto_last_score: 0,
-            auto_trail: vec![-1; 64], // must match TRAIL in autoplay.rs
+            auto_trail: vec![-1; 128], // must match TRAIL in autoplay/mod.rs
             auto_trail_i: 0,
             auto_period: 0,
             auto_cycles: 0,
+            auto_stuck: 0,
+            auto_prev_head: -1,
             auto_plan: std::collections::VecDeque::new(),
             muted: false,
             grace_until: None,

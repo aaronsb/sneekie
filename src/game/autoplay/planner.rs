@@ -19,54 +19,77 @@
 use std::collections::{HashSet, VecDeque};
 
 use super::sim::{Outcome, Sim};
-use super::DIRS;
+use super::{is_snake_char, reverse, DIRS};
 
 /// Hard cap on simulated steps per replan — the "bailout after N simulations".
 /// Rarely reached: a typical replan expands only beam_width × depth × 4 nodes.
-pub(super) const PLAN_BUDGET: i32 = 3000;
-/// How many moves deep the beam looks.
-pub(super) const PLAN_DEPTH: usize = 22;
+pub(super) const PLAN_BUDGET: i32 = 5000;
+/// How many moves deep the beam looks (far enough to see across a cleared patch
+/// to the next heart cluster).
+pub(super) const PLAN_DEPTH: usize = 30;
 /// Beam width: survivors kept after each depth layer.
 pub(super) const BEAM_WIDTH: usize = 6;
+/// Score docked per smiley the plan eats through. Far below a heart's reward
+/// (1,000,000) so the planner *will* punch through a smiley to reach food, but
+/// well above the distance term so it only does so when there's no clean path.
+const PENALTY_WEIGHT: i64 = 200_000;
+/// Score docked per step taken — the Bonus drains every move, so dawdling is a
+/// real cost. Kept *below* `DIST_WEIGHT` so a step that gets closer to food
+/// nets positive while a step that doesn't (twirling in place) nets negative.
+const STEP_PENALTY: i64 = 120;
+/// Weight on distance-to-nearest-food. Each step closer is worth this; it must
+/// exceed `STEP_PENALTY` for the bot to march toward far food instead of idling.
+const DIST_WEIGHT: i64 = 300;
 
 struct Node {
     sim: Sim,
     path: Vec<u32>,
     eaten: i32,
+    penalties: i32,
 }
 
 impl crate::game::Game {
-    /// The immutable static-obstacle map (true = impassable) read from VRAM:
-    /// everything that is not empty space, food, or the (movable) snake body.
+    /// The hard-obstacle map (true = impassable) read from VRAM: walls, stones,
+    /// arrows, hunters. Smileys are deliberately *left out* — they're passable at
+    /// a cost (see [`super::sim::Sim`]), so a smiley can't wall off a region.
     fn build_blocked(&self) -> Vec<bool> {
         let mut blocked = vec![false; 4000];
-        for off in (0..4000).step_by(2) {
-            blocked[off] = self.static_blocked(off as i32);
+        for off in (0..4000i32).step_by(2) {
+            blocked[off as usize] = self.hard_blocked(off);
         }
         blocked
     }
 
-    /// Snapshot the live board into a [`Sim`]: the body (tail→head) and the set
-    /// of remaining heart/club cells.
+    /// Snapshot the live board into a [`Sim`]: the body (tail→head), remaining
+    /// heart/club cells, and the smiley cells the plan may eat through at a cost.
     fn build_sim(&self) -> Sim {
         let mut body: VecDeque<i32> = VecDeque::new();
         for i in self.etel..=self.btel {
             body.push_back(self.t[i as usize]);
         }
         let mut food: HashSet<i32> = HashSet::new();
+        let mut penalty: HashSet<i32> = HashSet::new();
         for off in (0..4000i32).step_by(2) {
-            if matches!(self.peek(off), 3 | 5) {
-                food.insert(off);
+            match self.peek(off) {
+                3 | 5 => {
+                    food.insert(off);
+                }
+                1 => {
+                    penalty.insert(off);
+                }
+                _ => {}
             }
         }
-        Sim::new(body, food)
+        let mut sim = Sim::new(body, food);
+        sim.set_penalty(penalty);
+        sim
     }
 
     /// Multi-source BFS from every food cell, ignoring the snake body, giving a
     /// distance-to-nearest-food for any cell in O(1). The body-ignoring
     /// approximation is fine — this only *guides* the beam toward clusters; the
     /// per-node tail-safety check is what actually keeps moves survivable.
-    fn food_dist_field(&self, blocked: &[bool]) -> Vec<i32> {
+    pub(super) fn food_dist_field(&self, blocked: &[bool]) -> Vec<i32> {
         let mut dist = vec![i32::MAX; 4000];
         let mut q: VecDeque<i32> = VecDeque::new();
         for off in (0..4000).step_by(2) {
@@ -92,14 +115,27 @@ impl crate::game::Game {
         dist
     }
 
-    fn score_node(&self, sim: &Sim, blocked: &[bool], dist: &[i32], eaten: i32) -> i64 {
+    fn score_node(
+        &self,
+        sim: &Sim,
+        blocked: &[bool],
+        dist: &[i32],
+        eaten: i32,
+        penalties: i32,
+        depth: i32,
+    ) -> i64 {
         let mut s = eaten as i64 * 1_000_000;
+        s -= penalties as i64 * PENALTY_WEIGHT;
         if sim.tail_reachable(blocked) {
             s += 100_000;
         }
         let dh = dist[sim.head() as usize];
         let dp = if dh == i32::MAX { 300 } else { dh.min(300) };
-        s -= dp as i64 * 300;
+        s -= dp as i64 * DIST_WEIGHT;
+        // Time pressure: every step spent burns Bonus, so a step is only worth it
+        // if it brings the head closer to food. STEP_PENALTY < DIST_WEIGHT, so
+        // progress nets positive and twirling-in-place nets negative.
+        s -= depth as i64 * STEP_PENALTY;
         s += sim.open_space(blocked) as i64;
         s
     }
@@ -114,8 +150,8 @@ impl crate::game::Game {
         }
         let dist = self.food_dist_field(&blocked);
 
-        let mut beam = vec![Node { sim: init, path: Vec::new(), eaten: 0 }];
-        let mut best: Option<(i64, Vec<u32>)> = None;
+        let mut beam = vec![Node { sim: init, path: Vec::new(), eaten: 0, penalties: 0 }];
+        let mut best: Option<(i64, Vec<u32>, i32)> = None;
         let mut budget = PLAN_BUDGET;
 
         'depth: for _ in 0..PLAN_DEPTH {
@@ -132,13 +168,15 @@ impl crate::game::Game {
                         continue;
                     }
                     let eaten = node.eaten + i32::from(out == Outcome::Ate);
+                    let penalties = node.penalties + i32::from(out == Outcome::Penalty);
                     let mut path = node.path.clone();
                     path.push(sc);
-                    let score = self.score_node(&sim, &blocked, &dist, eaten);
-                    if best.as_ref().is_none_or(|(b, _)| score > *b) {
-                        best = Some((score, path.clone()));
+                    let score =
+                        self.score_node(&sim, &blocked, &dist, eaten, penalties, path.len() as i32);
+                    if best.as_ref().is_none_or(|(b, _, _)| score > *b) {
+                        best = Some((score, path.clone(), eaten));
                     }
-                    next.push((score, Node { sim, path, eaten }));
+                    next.push((score, Node { sim, path, eaten, penalties }));
                 }
             }
             if next.is_empty() {
@@ -148,6 +186,51 @@ impl crate::game::Game {
             next.truncate(BEAM_WIDTH);
             beam = next.into_iter().map(|(_, n)| n).collect();
         }
-        best.map(|(_, path)| path.into_iter().collect())
+        // If the beam reaches food within its horizon, commit that plan. If it
+        // doesn't (the local area is cleared), don't dither — descend the
+        // whole-board food-distance field straight toward the next region with
+        // points. Falling all the way through means truly boxed in → let greedy
+        // and the wedge guard handle it.
+        if let Some((_, path, eaten)) = &best {
+            if *eaten > 0 {
+                return Some(path.clone().into_iter().collect());
+            }
+        }
+        if let Some(mv) = self.beeline_move(&dist, &blocked) {
+            return Some(VecDeque::from([mv]));
+        }
+        best.map(|(_, path, _)| path.into_iter().collect())
+    }
+
+    /// Full-board descent on the food-distance field: the non-reverse neighbor
+    /// closest to the nearest remaining heart. The field is built over the whole
+    /// board each replan, so this paths to the next region at full compute rather
+    /// than letting the depth-limited beam idle in a cleared patch.
+    fn beeline_move(&self, dist: &[i32], blocked: &[bool]) -> Option<u32> {
+        let head = self.t[self.btel as usize];
+        let rev = reverse(self.e);
+        let mut best: Option<u32> = None;
+        let mut best_d = i32::MAX;
+        for (sc, d) in DIRS {
+            if sc == rev {
+                continue;
+            }
+            let n = head + d;
+            if n < 0 || (n as usize) >= 4000 || blocked[n as usize] {
+                continue;
+            }
+            if is_snake_char(self.peek(n)) {
+                continue; // the distance field ignores the body; don't walk into it
+            }
+            if dist[n as usize] < best_d {
+                best_d = dist[n as usize];
+                best = Some(sc);
+            }
+        }
+        if best_d == i32::MAX {
+            None
+        } else {
+            best
+        }
     }
 }
