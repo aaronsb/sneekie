@@ -137,19 +137,28 @@ forward. **And if there's no winning line at all, that's a draw**: the bot gives
 up the level and respawns (F10 skip in classic — no life lost; **ESC** in
 Sneekie+ — a life given up, fair and square) rather than thrashing forever.
 
-When neither planner is in charge — the moving-arrow levels (whose hazards aren't
-modeled yet), or when a search turns up nothing safe — a per-tick **greedy chain**
-takes over: BFS to the nearest food if the step stays tail-safe → ram an adjacent
-hunter it can afford → chase its own tail to thread out of a pocket → else head
-for the most open space. A short **move-history ring** also breaks repeating
-cycles, and two **stall/wedge guards** (no score gain for a long stretch, or the
-head not actually moving for several ticks) trigger the give-up-and-respawn above
-so the screensaver never freezes.
+**Time-aware planner — the moving-hazard levels.** The back-half levels run
+climbing/sweeping `↑→←` arrows and wall gaps that crawl down one row per step.
+These are deterministic, so the bot forecasts them and routes a *timed* path: a
+breadth-first search over `(cell, step)` to the nearest heart that's collision-free
+at every step — an arrow cell is lethal at exactly the steps an arrow occupies it,
+and a wall cell is passable only on the steps its gap is open. It replans every
+tick (the hazards have moved), threading arrow lanes and crossing gaps as they
+line up instead of chasing an opening it can't reach in time.
 
-Result: effectively immortal on the static classic levels, cycling through the
-layouts indefinitely in CGA color; a fair, go-down-swinging run in Sneekie+.
-Moving enemies (arrows, hunters) can still corner it — and that's fine, it just
-restarts. Watch it play either mode (`--auto`, `--auto --plus`, or the menu's
+When no planner is in charge — or when any search turns up nothing safe — a
+per-tick **greedy chain** backs everything up: BFS to the nearest food if the step
+stays tail-safe → ram an adjacent hunter it can afford → chase its own tail to
+thread out of a pocket → else head for the most open space. A short **move-history
+ring** also breaks repeating cycles, and two **stall/wedge guards** (no score gain
+for a long stretch, or the head not actually moving for several ticks) trigger the
+give-up-and-respawn above so the screensaver never freezes.
+
+Result: effectively immortal on the static classic levels, clearing the stone and
+moving-hazard levels too (it pushes stones and times the arrows/gaps), cycling the
+layouts in CGA color; a fair, go-down-swinging run in Sneekie+. A fast-moving
+swarm can still overwhelm it — and that's fine, it just restarts. Watch it play
+either mode (`--auto`, `--auto --plus`, or the menu's
 `A`). Ctrl+C to quit. (`AUTO_STALL` in `src/game/autoplay/mod.rs` tunes patience;
 `PLAN_BUDGET`/`PLAN_DEPTH`/`BEAM_WIDTH` in `planner.rs` and `MCTS_SIMS` in
 `mcts.rs` tune how hard the two planners think.)
@@ -193,7 +202,7 @@ clear the level. Highscore, theme, and mute state persist to
 | `src/game/enemies.rs` | The moving hazards (`sub*`) |
 | `src/game/play.rs` | Level loop, movement, death, boot sequence |
 | `src/game/plus.rs` | Sneekie+ survival mode and the boot menu |
-| `src/game/autoplay/` | The self-driving bot — `mod.rs` (dispatch + safety gates + stall/wedge guards), `greedy.rs` (reactive fallback chain), `planner.rs` (bounded beam search), `mcts.rs` (MCTS vs. the swarm), `sim.rs` (forward-model) |
+| `src/game/autoplay/` | The self-driving bot — `mod.rs` (dispatch + safety gates + stall/wedge guards), `greedy.rs` (reactive fallback chain), `planner.rs` (bounded beam search), `mcts.rs` (MCTS vs. the swarm), `navigate.rs` (time-aware routing through arrows/gaps), `sim.rs` (forward-model) |
 | `src/game/audio.rs` | Square-wave synth (behind the `audio` feature) |
 
 Classic Sneekie is fully preserved: every Sneekie+ hook in `play.rs` is guarded

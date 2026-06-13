@@ -20,6 +20,7 @@
 
 mod greedy;
 mod mcts;
+mod navigate;
 mod planner;
 mod sim;
 
@@ -30,11 +31,12 @@ use crate::theme::theme_index;
 /// (scan code, VRAM offset delta) for the four directions.
 const DIRS: [(u32, i32); 4] = [(72, -160), (80, 160), (75, -2), (77, 2)];
 
-/// Which planner drives a given tick (see [`super::Game::auto_mode`]).
+/// Which planner drives a given tick (see [`super::Game::auto_mode`]). The greedy
+/// chain (`auto_dir`) is the shared fallback beneath all of these.
 enum AutoMode {
-    Greedy, // reactive chain (moving arrows we can't predict)
-    Beam,   // bounded forward search (static board)
-    Mcts,   // tree search against the loose swarm (Sneekie+ danger)
+    Beam,       // bounded forward search (static board)
+    Mcts,       // tree search against the loose swarm (Sneekie+ danger)
+    Predictive, // time-aware routing through moving arrows / wall gaps
 }
 
 /// Steps with no score change before the bot gives up and skips the level
@@ -188,8 +190,15 @@ impl super::Game {
                     self.auto_plan.clear();
                 }
             }
-            // Moving arrows we can't yet predict: stay fully reactive.
-            AutoMode::Greedy => self.auto_plan.clear(),
+            // Moving arrows / wall gaps: forecast them and route a timed path.
+            // Replans every tick (hazards move); greedy backs it up if the search
+            // finds nothing safe.
+            AutoMode::Predictive => {
+                self.auto_plan.clear();
+                if let Some(mv) = self.navigate() {
+                    return mv;
+                }
+            }
         }
         self.auto_dir()
     }
@@ -206,16 +215,16 @@ impl super::Game {
     }
 
     /// Which planner drives this tick:
+    /// - **Predictive** — level slots with moving arrows or crawling wall gaps:
+    ///   their motion is deterministic, so forecast it and route a timed path.
     /// - **Mcts** — Sneekie+ with the swarm loose (the deterministic, searchable
     ///   adversary). Eating doesn't reseed during danger, so rollouts are exact.
-    /// - **Greedy** — level slots that run moving arrows; their motion isn't
-    ///   modeled yet, so neither lookahead form is trustworthy.
     /// - **Beam** — everything else: classic static levels and the Sneekie+
     ///   grace phase (no hunters yet — the same static routing problem).
     fn auto_mode(&self) -> AutoMode {
-        let arrow = matches!((self.level - 1).rem_euclid(16), 4 | 5 | 6 | 7 | 12 | 13 | 14 | 15);
-        if arrow {
-            AutoMode::Greedy
+        let moving = matches!((self.level - 1).rem_euclid(16), 4 | 5 | 6 | 7 | 12 | 13 | 14 | 15);
+        if moving {
+            AutoMode::Predictive
         } else if self.plus && self.danger {
             AutoMode::Mcts
         } else {
