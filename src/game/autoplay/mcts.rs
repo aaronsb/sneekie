@@ -23,17 +23,24 @@ use rayon::prelude::*;
 use super::sim::{Outcome, Sim};
 use super::DIRS;
 
-/// Tree simulations per worker per move. Total search ≈ this × cores, so adding
-/// cores buys more surface area rather than just finishing sooner.
-pub(super) const MCTS_SIMS: u32 = 1200;
-/// How many moves each rollout plays before scoring the resulting state.
-const ROLLOUT_DEPTH: usize = 40;
+/// Tree simulations per worker per move. The per-move decision saturates fast
+/// (branching ≤ 3), so compute is better spent on *depth* — long rollouts and
+/// diverse deep lines across workers — than on yet more shallow sims here.
+pub(super) const MCTS_SIMS: u32 = 1500;
+/// How many moves each rollout plays before scoring — the lookahead horizon.
+/// Long enough to see several hunter approaches, so a move that's safe now but
+/// doomed a dozen steps out is scored as doomed. This is the main depth lever.
+const ROLLOUT_DEPTH: usize = 100;
 /// PUCT exploration constant: higher widens the search, lower sharpens it.
-const C_PUCT: f64 = 1.3;
+const C_PUCT: f64 = 1.4;
 /// Rollout exploration: this fraction of rollout steps take a random legal move
 /// instead of the greedy one, so workers' trees diverge and parallelism pays.
 const ROLLOUT_EPS_NUM: u64 = 1;
 const ROLLOUT_EPS_DEN: u64 = 4;
+/// Fraction of the root priors replaced by per-worker random noise, so the N
+/// cores commit to deepening *different* first moves rather than all agreeing —
+/// the diversity that makes root-parallel cores buy depth, not just repetition.
+const ROOT_NOISE_FRAC: f64 = 0.25;
 
 /// The read-only board the workers share: the static-obstacle map (hunters left
 /// passable — they live in the `Sim`) and the food-distance field. `Send + Sync`
@@ -63,6 +70,30 @@ impl Rng {
     }
     fn roll_eps(&mut self) -> bool {
         self.next() % ROLLOUT_EPS_DEN < ROLLOUT_EPS_NUM
+    }
+    /// A float in (0, 1).
+    fn unit(&mut self) -> f64 {
+        ((self.next() >> 11) as f64 / (1u64 << 53) as f64).max(1e-9)
+    }
+}
+
+/// Mix per-worker random weight into the root priors (an Exp(1)/Dirichlet-ish
+/// draw, renormalized) so each worker biases toward deepening a different first
+/// move. Without this, independent trees converge on the same line and extra
+/// cores just repeat work.
+fn root_noise(untried: &mut [(u32, i32, f64)], rng: &mut Rng) {
+    if untried.is_empty() {
+        return;
+    }
+    let mut noise: Vec<f64> = untried.iter().map(|_| -rng.unit().ln()).collect();
+    let sum: f64 = noise.iter().sum();
+    if sum > 0.0 {
+        for x in &mut noise {
+            *x /= sum;
+        }
+    }
+    for (e, &z) in untried.iter_mut().zip(noise.iter()) {
+        e.2 = (1.0 - ROOT_NOISE_FRAC) * e.2 + ROOT_NOISE_FRAC * z;
     }
 }
 
@@ -220,7 +251,9 @@ fn rollout(ctx: &PlanCtx, mut sim: Sim, rng: &mut Rng) -> f64 {
 fn search_tree(ctx: &PlanCtx, root: &Sim, sims: u32, seed: u64) -> (Vec<(u32, u32)>, usize) {
     let mut rng = Rng::new(seed);
     let mut arena: Vec<Node> = Vec::with_capacity(sims as usize + 8);
-    arena.push(node(ctx, root.clone(), 0, 0, 1.0));
+    let mut root_node = node(ctx, root.clone(), 0, 0, 1.0);
+    root_noise(&mut root_node.untried, &mut rng); // diversify deep lines across workers
+    arena.push(root_node);
 
     for _ in 0..sims {
         // selection

@@ -117,12 +117,16 @@ the next — the swarm has moved, after all.
 The MCTS is **root-parallel**: `--planner-cores N` (or `+`/`-` live while it
 plays; the danger-phase HUD shows cores + tree nodes searched) grows N
 independent trees from the same root, each with its own seeded ε-greedy rollouts
-so they diverge, then merges their visit counts. The default reserves a couple
-of hardware threads. A caveat worth stating plainly: because each per-move
-decision has a branching factor of ≤3, a single core's search already saturates
-it — so more cores don't visibly improve play at the current budget. Cores start
-to matter only when each one is *starved* (a tight per-move time budget) or spent
-on greater depth rather than breadth.
+*and* per-worker root noise so they deepen **different** first-move lines, then
+merges their visit counts. The default reserves a couple of hardware threads.
+
+There's a real lesson in the tuning here. With **shallow** search, more cores do
+nothing: each per-move decision has a branching factor of ≤3, so one core's MCTS
+already saturates it and the extra trees just agree. The compute only pays once
+it's spent on **depth** — long rollouts (100-move horizon) and root-diversified
+deep lines. Measured on the level-2 swarm, same wall-clock per move: 1 core lost
+3 lives over the danger phase; 8 cores lost 1. Breadth saturates; depth scales —
+which is the whole point of throwing several modern cores at an 8086 snake.
 
 **Take the penalty if it's the only way through.** Smileys (`−50`) are not walls
 to the planner — they're passable *at a cost*. If the only route to the remaining
