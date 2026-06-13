@@ -19,7 +19,7 @@
 use std::collections::{HashSet, VecDeque};
 
 use super::sim::{Outcome, Sim};
-use super::{is_snake_char, reverse, DIRS};
+use super::{reverse, DIRS};
 
 /// Hard cap on simulated steps per replan — the "bailout after N simulations".
 /// Rarely reached: a typical replan expands only beam_width × depth × 4 nodes.
@@ -33,13 +33,14 @@ pub(super) const BEAM_WIDTH: usize = 6;
 /// (1,000,000) so the planner *will* punch through a smiley to reach food, but
 /// well above the distance term so it only does so when there's no clean path.
 const PENALTY_WEIGHT: i64 = 200_000;
-/// Score docked per step taken — the Bonus drains every move, so dawdling is a
-/// real cost. Kept *below* `DIST_WEIGHT` so a step that gets closer to food
-/// nets positive while a step that doesn't (twirling in place) nets negative.
-const STEP_PENALTY: i64 = 120;
+/// Score docked per step taken — time is the real pressure: every move drains
+/// Bonus, and dithering during the Sneekie+ grace only brings the swarm sooner.
+/// Kept *below* `DIST_WEIGHT` so a step that gets closer to food still nets
+/// positive while a step that doesn't (snaking back and forth) nets negative.
+const STEP_PENALTY: i64 = 200;
 /// Weight on distance-to-nearest-food. Each step closer is worth this; it must
 /// exceed `STEP_PENALTY` for the bot to march toward far food instead of idling.
-const DIST_WEIGHT: i64 = 300;
+const DIST_WEIGHT: i64 = 500;
 
 struct Node {
     sim: Sim,
@@ -196,41 +197,49 @@ impl crate::game::Game {
                 return Some(path.clone().into_iter().collect());
             }
         }
-        if let Some(mv) = self.beeline_move(&dist, &blocked) {
+        if let Some(mv) = self.beeline_move() {
             return Some(VecDeque::from([mv]));
         }
         best.map(|(_, path, _)| path.into_iter().collect())
     }
 
-    /// Full-board descent on the food-distance field: the non-reverse neighbor
-    /// closest to the nearest remaining heart. The field is built over the whole
-    /// board each replan, so this paths to the next region at full compute rather
-    /// than letting the depth-limited beam idle in a cleared patch.
-    fn beeline_move(&self, dist: &[i32], blocked: &[bool]) -> Option<u32> {
+    /// Body-aware BFS to the nearest remaining heart, returning the first step of
+    /// that shortest path. Used when the beam can't reach food within its horizon
+    /// (the local patch is cleared): a real path over open cells — smileys
+    /// passable at their cost, the snake's own body NOT — so a long snake heads
+    /// straight for the next region instead of oscillating against a body-blind
+    /// distance gradient.
+    fn beeline_move(&self) -> Option<u32> {
         let head = self.t[self.btel as usize];
         let rev = reverse(self.e);
-        let mut best: Option<u32> = None;
-        let mut best_d = i32::MAX;
+        let mut seen = vec![false; 4000];
+        let mut first = vec![0u32; 4000];
+        let mut q: VecDeque<i32> = VecDeque::new();
+        seen[head as usize] = true;
         for (sc, d) in DIRS {
             if sc == rev {
                 continue;
             }
             let n = head + d;
-            if n < 0 || (n as usize) >= 4000 || blocked[n as usize] {
-                continue;
-            }
-            if is_snake_char(self.peek(n)) {
-                continue; // the distance field ignores the body; don't walk into it
-            }
-            if dist[n as usize] < best_d {
-                best_d = dist[n as usize];
-                best = Some(sc);
+            if n >= 0 && (n as usize) < 4000 && !seen[n as usize] && matches!(self.peek(n), 32 | 3 | 5 | 1) {
+                seen[n as usize] = true;
+                first[n as usize] = sc;
+                q.push_back(n);
             }
         }
-        if best_d == i32::MAX {
-            None
-        } else {
-            best
+        while let Some(c) = q.pop_front() {
+            if self.is_food(c) {
+                return Some(first[c as usize]);
+            }
+            for (_sc, d) in DIRS {
+                let n = c + d;
+                if n >= 0 && (n as usize) < 4000 && !seen[n as usize] && matches!(self.peek(n), 32 | 3 | 5 | 1) {
+                    seen[n as usize] = true;
+                    first[n as usize] = first[c as usize];
+                    q.push_back(n);
+                }
+            }
         }
+        None
     }
 }
