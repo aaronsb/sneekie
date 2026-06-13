@@ -1,16 +1,25 @@
 //! Autoplay — a self-driving bot.
 //!
-//! Each step it picks a direction by reading VRAM directly:
+//! On the static maze levels the bot is driven by a bounded forward-search
+//! [`planner`]: it snapshots the board into a [`sim`] and beam-searches a
+//! multi-move plan toward the heart clusters, committing only to moves that keep
+//! its tail reachable, then executes that plan tick-by-tick. Where lookahead
+//! can't help — Sneekie+ hunters, or the classic levels with moving arrows — it
+//! falls through to a per-tick **greedy** chain instead:
 //!  1. **BFS** from the head over passable cells (empty / heart / club) to the
-//!     nearest food, and take the first step of that shortest path.
-//!  2. If no food is reachable, **flood-fill** each candidate neighbor and head
-//!     toward the most open space — a cheap survival heuristic that avoids
-//!     painting the snake into a corner.
+//!     nearest food, taking the first step of that shortest path — if it's safe.
+//!  2. (Sneekie+) ram an adjacent hunter if it can pay the cost.
+//!  3. **Chase the tail** to thread out of a pocket.
+//!  4. Else flood-fill and head toward the **most open space**.
 //!
 //! Everything else (walls, the snake's own body, smileys, stones, arrows, and
 //! Sneekie+ hunters) is treated as impassable, so the bot routes around hazards
-//! for free. It's a solid greedy player, not a perfect one — a Hamiltonian
-//! cycle would never die but would be slow and dull to watch.
+//! for free. A short move-history ring also breaks repeating cycles, and stall
+//! guards skip (classic) or ESC (Sneekie+) a level it truly can't make progress
+//! on, so the screensaver keeps moving.
+
+mod planner;
+mod sim;
 
 use std::collections::VecDeque;
 
@@ -86,12 +95,28 @@ impl super::Game {
             self.auto_cycles = 0;
         }
 
-        if self.zcore != self.auto_last_score {
-            self.auto_last_score = self.zcore;
+        // Stall detection. Classic counts *progress* as the score going up
+        // (eating); a penalty going *down* must NOT reset the counter, or a
+        // wall-bonking wedge — which loses points every tick — would keep the
+        // stall guard from ever firing. Sneekie+ keeps the looser "any change"
+        // rule so its swings (bonus drain, multiplier resets, ram costs) don't
+        // make it give up a life too eagerly.
+        let progressed = if self.plus {
+            self.zcore != self.auto_last_score
+        } else {
+            self.zcore > self.auto_last_score
+        };
+        if progressed {
             self.auto_idle = 0;
         } else {
             self.auto_idle += 1;
         }
+        if self.zcore != self.auto_last_score {
+            // Eating reseeds the field (a new heart + smiley drop at random), so
+            // any queued plan is stale — rebuild it from the fresh board.
+            self.auto_plan.clear();
+        }
+        self.auto_last_score = self.zcore;
         if !self.plus {
             // Classic: skip a level the bot can't make progress on so the
             // screensaver keeps moving.
@@ -116,7 +141,41 @@ impl super::Game {
                 return sc;
             }
         }
+
+        // The bounded forward-search planner drives the static maze levels:
+        // multi-step lookahead toward heart clusters. Reactive situations
+        // (Sneekie+ hunters, or classic levels with moving arrows) defeat
+        // lookahead, so they skip the planner and use the greedy chain below.
+        //
+        // Every committed move passes the same *hard* tail-safety gate the
+        // greedy player uses: the planner only ranks tail-safety as a (large)
+        // bonus, so on its own it could still commit a self-trapping move in a
+        // pinch. Gating with `is_safe_move` means the planner supplies the
+        // routing while the proven one-ply safety check supplies the guarantee;
+        // if its best move isn't safe, we drop the plan and defer to greedy.
+        if !self.auto_reactive() {
+            let stale = self
+                .auto_plan
+                .front()
+                .is_none_or(|&mv| !self.is_safe_move(mv));
+            if stale {
+                self.auto_plan = self.plan_path().unwrap_or_default();
+            }
+            if let Some(&mv) = self.auto_plan.front() {
+                if self.is_safe_move(mv) {
+                    self.auto_plan.pop_front();
+                    return mv;
+                }
+                self.auto_plan.clear();
+            }
+        }
         self.auto_dir()
+    }
+
+    /// True when lookahead can't be trusted past one tick: Sneekie+ (hunters
+    /// move with the snake) or a classic level slot that runs moving arrows.
+    fn auto_reactive(&self) -> bool {
+        self.plus || matches!((self.level - 1).rem_euclid(16), 4 | 5 | 6 | 7 | 12 | 13 | 14 | 15)
     }
 
     /// Steps since the head was last on `cell` within the ring (0 = not found).
@@ -305,6 +364,7 @@ impl super::Game {
         self.auto_trail_i = 0;
         self.auto_period = 0;
         self.auto_cycles = 0;
+        self.auto_plan.clear();
     }
 
     /// BFS from the head to the nearest food; returns the first step's scan code.

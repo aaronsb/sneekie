@@ -115,6 +115,7 @@ pub struct Game {
     auto_trail_i: usize,             // autoplay: ring write index
     auto_period: i32,                // autoplay: last detected cycle length
     auto_cycles: i32,                // autoplay: consecutive same-period matches
+    auto_plan: std::collections::VecDeque<u32>, // autoplay: queued planner moves (scan codes)
     muted: bool,                     // audio muted (Sneekie+ only)
     grace_until: Option<Instant>,    // when the current level's grace period ends
     danger: bool,                    // hunters are loose
@@ -183,6 +184,7 @@ impl Game {
             auto_trail_i: 0,
             auto_period: 0,
             auto_cycles: 0,
+            auto_plan: std::collections::VecDeque::new(),
             muted: false,
             grace_until: None,
             danger: false,

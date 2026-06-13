@@ -85,7 +85,22 @@ Balance lives in named constants at the top of `src/game/plus.rs`
 
 `--auto` (or `A` in the menu, which then asks classic or Sneekie+) hands the
 snake to a bot that plays — and, with its auto-restart, basically turns Sneekie
-into a weird little screensaver (locked to glorious CGA color). Each step:
+into a weird little screensaver (locked to glorious CGA color).
+
+On the **static maze levels** the bot is driven by a bounded forward-search
+**planner** (several cores of modern compute thrown at an 8086 GW-BASIC game).
+Each replan it snapshots the board into a throwaway `Sim` and runs a budget-capped
+**beam search** over move sequences, rolling each candidate forward and scoring
+the result by — in priority order — food eaten, whether the head can still reach
+its tail, distance to the nearest remaining heart, and open space. It commits to
+the best plan and executes it tick-by-tick (running at full speed, not game-tick
+speed), bailing out after a fixed number of simulated steps. Every committed move
+still passes the **hard tail-safety gate** below, so the planner supplies the
+routing while the proven one-ply check supplies the never-self-trap guarantee.
+
+Where lookahead can't be trusted past one tick — **Sneekie+** (hunters move with
+you) and the classic levels with **moving arrows** — the bot falls through to a
+per-tick greedy chain instead. Each step:
 
 1. **BFS** from the head to the nearest food (empty/heart/club cells), and take
    the first step of that shortest path —
@@ -99,7 +114,7 @@ into a weird little screensaver (locked to glorious CGA color). Each step:
    itself from a pocket instead of hugging the roomiest corner.
 4. In Sneekie+, if it's cornered by hunters but has banked enough points, it
    **rams one** (paying the defeat cost) to punch a way out.
-5. In **classic**, if it **stalls** (no score change for ~13s — a maze it can't
+5. In **classic**, if it **stalls** (no score *gain* for ~13s — a maze it can't
    clear safely), it uses the F10 skip-level cheat so the show keeps moving.
    **Sneekie+ gets the same clock as a human** — full grace, no shortcut, no
    skipping. It plays the grace, then fights the swarm until it clears the level
@@ -118,7 +133,9 @@ Result: effectively immortal on the static classic levels, cycling through the
 layouts indefinitely in CGA color; a fair, go-down-swinging run in Sneekie+.
 Moving enemies (arrows, hunters) can still corner it — and that's fine, it just
 restarts. Watch it play either mode (`--auto`, `--auto --plus`, or the menu's
-`A`). Ctrl+C to quit. (`AUTO_STALL` in `src/game/autoplay.rs` tunes patience.)
+`A`). Ctrl+C to quit. (`AUTO_STALL` in `src/game/autoplay/mod.rs` tunes patience;
+`PLAN_BUDGET`/`PLAN_DEPTH`/`BEAM_WIDTH` in `src/game/autoplay/planner.rs` tune
+how hard the planner thinks.)
 
 ## How to play
 
@@ -159,7 +176,7 @@ clear the level. Highscore, theme, and mute state persist to
 | `src/game/enemies.rs` | The moving hazards (`sub*`) |
 | `src/game/play.rs` | Level loop, movement, death, boot sequence |
 | `src/game/plus.rs` | Sneekie+ survival mode and the boot menu |
-| `src/game/autoplay.rs` | The self-driving bot (BFS + flood-fill) |
+| `src/game/autoplay/` | The self-driving bot — `mod.rs` (greedy chain + cycle/stall guards), `planner.rs` (bounded beam search), `sim.rs` (forward-model) |
 | `src/game/audio.rs` | Square-wave synth (behind the `audio` feature) |
 
 Classic Sneekie is fully preserved: every Sneekie+ hook in `play.rs` is guarded
